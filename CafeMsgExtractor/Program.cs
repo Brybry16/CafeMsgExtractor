@@ -9,7 +9,9 @@ namespace CafeMsgExtractor
 {
     internal class Program
     {
-        private static readonly string[] languages = { "ja", "en", "fr", "de", "it", "es", "ko", "zh" };
+        private static readonly string[] languages = { "ja", "en", "fr", "de", "it", "es", "ko", "zh", "_misc" };
+
+        private const uint HEADER_MAGIC = 0xF6542E8D; 
 
         private static string inputDir, outputDir;
         
@@ -26,12 +28,19 @@ namespace CafeMsgExtractor
         {
             if (args.Length != 2 || !Directory.Exists(args[0]) || !Directory.Exists(args[1]))
             {
-                Error();
-                return;
+                #if DEBUG
+                    inputDir = @"D:\Documents\Hack_Datamine\Switch\Tools\CafeMixArchiveExtractor\archives\out";
+                    outputDir = @"D:\Documents\Hack_Datamine\Switch\Tools\CafeMixArchiveExtractor\test\Messages";
+                #else
+                    Error();
+                    return;
+                #endif
             }
-
-            inputDir = args[0];
-            outputDir = args[1];
+            else
+            {
+                inputDir = args[0];
+                outputDir = args[1];
+            }
 
             string[] subDirs = Directory
                 .GetDirectories(inputDir)
@@ -76,7 +85,8 @@ namespace CafeMsgExtractor
                 Console.Out.WriteLine("\n\nExtracting Category : " + category);
                 for (int i = 0; i < directories.Length; i++)
                 {
-                    ExtractCategory(category, directories[i], languages[i]);
+                    int l = i >= languages.Length ? languages.Length - 1 : i;
+                    ExtractCategory(category, directories[i], languages[l]);
                 }
             }
 
@@ -115,14 +125,22 @@ namespace CafeMsgExtractor
         public static void ExtractFiles(string directory, DirectoryInfo outDir)
         {
             string[] files = Directory.GetFiles(directory, "*.msg");
+            List<string> fileNames = new List<string>();
+            bool isMessage;
+
+            Directory.CreateDirectory(Path.Combine(outDir.FullName, "messages"));
             
             foreach (string file in files)
             {
-                byte[] bytesFile = File.ReadAllBytes(file).Skip(96).ToArray();
+                isMessage = false;
+                
+                byte[] headerBytes = File.ReadAllBytes(file);
+                byte[] bytesFile = headerBytes.Skip(96).ToArray();
+                headerBytes = headerBytes.Take(96).ToArray();
                     
                 string text = Regex.Replace(languageEncoder.GetString(bytesFile), @"\x00", "");
 
-                string fileName;
+                string fileName = "";
                     
                 if (text.LastIndexOf(substringSeparator, StringComparison.Ordinal) > -1)
                 {
@@ -131,25 +149,74 @@ namespace CafeMsgExtractor
                         @"^([\w]+)").Value;
 
                     text = text.Substring(0, text.LastIndexOf(substringSeparator, StringComparison.Ordinal));
+
+                    isMessage = true;
+                }
+                else if(BitConverter.ToUInt32(headerBytes, 0) == HEADER_MAGIC)
+                {
+                    int i = 0;
+
+                    char[] invalidChars = Path.GetInvalidPathChars().Union(Path.GetInvalidFileNameChars()).ToArray();
+                    
+                    while (bytesFile[i] != 0x00 || fileName.Length == 0)
+                    {
+                        char c = Convert.ToChar(bytesFile[i]);
+                        i++;
+                        
+                        if(fileName.Length == 0 && c == '\0')
+                        {
+                            continue;
+                        }
+                        
+                        fileName += c;
+                    }
+
+                    while (fileName.IndexOfAny(invalidChars) >= 0)
+                    {
+                        StringBuilder sb = new StringBuilder(fileName);
+                        sb[fileName.IndexOfAny(invalidChars)] = '_';
+                        fileName = sb.ToString();
+                    }
                 }
                 else
                 {
                     fileName = Path.GetFileNameWithoutExtension(file);
                 }
 
+                // Make sure we don't have duplicate file names in the same directory
+                if (fileNames.Contains(fileName))
+                {
+                    int i = 0;
+                    string newFileName;
+                    
+                    do
+                    {
+                        newFileName = fileName + " (" + ++i + ")";
+                    } while (fileNames.Contains(newFileName));
+
+                    fileName = newFileName;
+                }
+
+                fileNames.Add(fileName);
                 fileName += ".txt";
 
-                string newFile = Path.Combine(outDir.FullName, fileName);
+                Console.Out.WriteLine("- " + fileName);
 
-                Console.Out.WriteLine("- " + newFile);
-                    
+                string outPath = outDir.FullName;
+                
+                if (isMessage)
+                {
+                    outPath = Path.Combine(outPath, "messages");
+                }
+
+                string newFile = Path.Combine(outPath, fileName);
+                
                 if (File.Exists(newFile))
                 {
                     File.Delete(newFile);
                 }
 
                 File.WriteAllText(newFile, text);
-                    
             }
         }
     }
