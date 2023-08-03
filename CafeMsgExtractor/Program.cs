@@ -11,12 +11,16 @@ namespace CafeMsgExtractor
     {
         private static readonly string[] languages = { "ja", "en", "fr", "de", "it", "es", "ko", "zh", "_misc" };
 
-        private const uint HEADER_MAGIC = 0xF6542E8D; 
+        private const uint HEADER_MAGIC = 0xF6542E8D;
+
+        private static readonly byte[] MSG_MAGIC = {
+            0x6D, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x00
+        };
 
         private static string inputDir, outputDir;
         
-        private static readonly string substringSeparator = "message";
-        private static readonly Encoding languageEncoder = Encoding.GetEncoding("ISO-8859-1");
+        private static readonly string substringSeparator = "message ";
+        private static readonly Encoding languageEncoder = Encoding.GetEncoding("utf-8");
 
         private static void Error()
         {
@@ -29,8 +33,6 @@ namespace CafeMsgExtractor
             if (args.Length != 2 || !Directory.Exists(args[0]) || !Directory.Exists(args[1]))
             {
                 #if DEBUG
-                    inputDir = @"D:\Documents\Hack_Datamine\Switch\Tools\CafeMixArchiveExtractor\archives\out";
-                    outputDir = @"D:\Documents\Hack_Datamine\Switch\Tools\CafeMixArchiveExtractor\test\Messages";
                 #else
                     Error();
                     return;
@@ -106,23 +108,55 @@ namespace CafeMsgExtractor
             DirectoryInfo outDir = Directory.CreateDirectory(Path.Combine(outputDir, categoryName, subDirName));
             
             Console.Out.WriteLine("\nDirectory : " + categoryName + "/" + subDirName);
+            Console.Out.WriteLine("OutDir : " + outDir.FullName);
             Console.Out.WriteLine("Files :");
 
-            ExtractFiles(directory, outDir);
+            ExtractFiles(directory, outDir, languageEncoder);
+            //CopyFiles(directory, outDir);
         }
 
         public static void ExtractCategory(string categoryName, string directory, string language)
         {
+
+            Encoding encoder = languageEncoder;
+            
             string subDirName = Path.GetFileNameWithoutExtension(categoryName);
             DirectoryInfo outDir = Directory.CreateDirectory(Path.Combine(outputDir, language));
             
             Console.Out.WriteLine("\nDirectory : " + subDirName + "/" + language);
+            Console.Out.WriteLine("OutDir : " + outDir.FullName);
             Console.Out.WriteLine("Files :");
 
-            ExtractFiles(directory, outDir);
+            ExtractFiles(directory, outDir, encoder);
+            //CopyFiles(directory, outDir);
         }
 
-        public static void ExtractFiles(string directory, DirectoryInfo outDir)
+        public static void CopyFiles(string directory, DirectoryInfo outDir)
+        {
+            string[] files = Directory.GetFiles(directory, "*.msg");
+
+            foreach (string file in files)
+            {
+                
+                string fileName = Path.GetFileName(file);
+                
+                Console.Out.WriteLine("- " + fileName);
+
+                string outPath = Path.Combine(outDir.FullName, Path.GetFileName(directory));
+                Directory.CreateDirectory(outPath);
+
+                string newFile = Path.Combine(outPath, fileName);
+                
+                if (File.Exists(newFile))
+                {
+                    File.Delete(newFile);
+                }
+
+                File.Copy(file, newFile);
+            }
+        }
+
+        public static void ExtractFiles(string directory, DirectoryInfo outDir, Encoding encoder)
         {
             string[] files = Directory.GetFiles(directory, "*.msg");
             List<string> fileNames = new List<string>();
@@ -135,20 +169,35 @@ namespace CafeMsgExtractor
                 isMessage = false;
                 
                 byte[] headerBytes = File.ReadAllBytes(file);
-                byte[] bytesFile = headerBytes.Skip(96).ToArray();
+                byte[] bytesFile;
+                byte[] footerBytes = null;
+                string text;
+                
+                BoyerMoore searcher = new BoyerMoore(MSG_MAGIC);
+                var indexes = searcher.Search(headerBytes);
+
+                if (indexes.Any())
+                {
+                    footerBytes = headerBytes.Skip(indexes.Last()).ToArray();
+                    bytesFile = headerBytes.Skip(96).Take(indexes.Last() - 96).ToArray();
+                    text = Encoding.Unicode.GetString(bytesFile);
+                }
+                else
+                {
+                    bytesFile = headerBytes.Skip(96).ToArray();
+                    text = languageEncoder.GetString(bytesFile);
+                }
+                
                 headerBytes = headerBytes.Take(96).ToArray();
-                    
-                string text = Regex.Replace(languageEncoder.GetString(bytesFile), @"\x00", "");
 
                 string fileName = "";
-                    
-                if (text.LastIndexOf(substringSeparator, StringComparison.Ordinal) > -1)
+                if (footerBytes != null)
                 {
+                    string footerText = languageEncoder.GetString(footerBytes);
+                    
                     fileName = Regex.Match(
-                        text.Substring(text.LastIndexOf(substringSeparator, StringComparison.Ordinal) + substringSeparator.Length),
+                        footerText.Substring(substringSeparator.Length),
                         @"^([\w]+)").Value;
-
-                    text = text.Substring(0, text.LastIndexOf(substringSeparator, StringComparison.Ordinal));
 
                     isMessage = true;
                 }
